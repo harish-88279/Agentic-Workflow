@@ -1,6 +1,9 @@
 const prisma = require('../config/prisma');
 const { callUnboundAI } = require('./aiService');
 
+// --- HELPER 0: SLEEP (For Demo UI pacing) ---
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 // --- HELPER 1: VALIDATOR LOGIC ---
 function validateStep(output, criteria) {
   if (!criteria || criteria.trim() === "") return true;
@@ -38,11 +41,16 @@ function extractRelevantContext(fullOutput) {
 }
 
 // --- MAIN FUNCTION: EXECUTE WORKFLOW ---
-async function executeWorkflow(name, steps) {
+// Accepts 'onUpdate' callback for streaming events to the frontend
+async function executeWorkflow(name, steps, onUpdate = () => {}) {
+  
   // 1. Create Workflow Record
   const workflow = await prisma.workflow.create({
     data: { name: name || "Untitled Run", steps: steps }
   });
+
+  // Notify: Workflow Started
+  onUpdate({ type: 'WORKFLOW_START', workflowId: workflow.id });
 
   let results = [];
   let currentContext = ""; 
@@ -57,10 +65,21 @@ async function executeWorkflow(name, steps) {
     let attemptCount = 0;
     let aiOutput = "";
 
+    // Notify: Step Started
+    onUpdate({ type: 'STEP_START', stepId: step.id, model: step.model });
+
+    // --- DEMO FIX: Force a 1s pause so "Executing" state is visible ---
+    await sleep(1000);
+
     // --- RETRY LOOP ---
     while (!stepPassed && attemptCount < MAX_RETRIES) {
       attemptCount++;
       console.log(`Step ${step.id} - Attempt ${attemptCount}/${MAX_RETRIES}`);
+
+      // Notify: Retry Attempt (only if it's not the first try)
+      if (attemptCount > 1) {
+        onUpdate({ type: 'STEP_RETRY', stepId: step.id, attempt: attemptCount });
+      }
 
       // A. Build Prompt
       let finalPrompt = step.prompt;
@@ -88,13 +107,17 @@ async function executeWorkflow(name, steps) {
     // --- END RETRY LOOP ---
 
     // 3. Record Result (Log the final attempt)
-    results.push({
+    const stepResult = {
       stepId: step.id,
       output: aiOutput,
       status: stepPassed ? "SUCCESS" : "FAILED",
       criteriaMatch: stepPassed,
       attempts: attemptCount 
-    });
+    };
+    results.push(stepResult);
+
+    // Notify: Step Completed (Send result to frontend immediately)
+    onUpdate({ type: 'STEP_COMPLETE', stepId: step.id, result: stepResult });
 
     // 4. Decision: Stop or Continue?
     if (!stepPassed) {
@@ -116,6 +139,9 @@ async function executeWorkflow(name, steps) {
     }
   });
 
+  // Notify: Done
+  onUpdate({ type: 'WORKFLOW_COMPLETE', execution });
+
   return { workflowId: workflow.id, execution };
 }
 
@@ -128,4 +154,18 @@ async function getHistory() {
   });
 }
 
-module.exports = { executeWorkflow, getHistory };
+// --- DELETE FUNCTION ---
+async function deleteWorkflow(id) {
+  // 1. Delete all related executions first (Manual Cascade)
+  await prisma.execution.deleteMany({
+    where: { workflowId: id }
+  });
+  
+  // 2. Delete the workflow itself
+  return await prisma.workflow.delete({
+    where: { id }
+  });
+}
+
+// Update exports
+module.exports = { executeWorkflow, getHistory, deleteWorkflow };

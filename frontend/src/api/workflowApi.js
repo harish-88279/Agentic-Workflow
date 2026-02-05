@@ -5,6 +5,12 @@ export const fetchHistory = async () => {
   return await res.json();
 };
 
+export const deleteWorkflow = async (id) => {
+  const res = await fetch(`${API_URL}/workflows/${id}`, {
+    method: 'DELETE',
+  });
+  return await res.json();
+};
 export async function* runWorkflowStream(payload) {
   const response = await fetch(`${API_URL}/run-workflow`, {
     method: 'POST',

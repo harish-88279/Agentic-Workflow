@@ -31,3 +31,14 @@ exports.getHistory = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch history" });
   }
 };
+
+exports.deleteWorkflow = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await workflowService.deleteWorkflow(id);
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Delete failed:", error);
+    res.status(500).json({ error: "Failed to delete workflow" });
+  }
+};

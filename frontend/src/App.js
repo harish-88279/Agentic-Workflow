@@ -2,24 +2,39 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import StepEditor from './components/StepEditor';
 import ResultsView from './components/ResultsView';
-import { fetchHistory, runWorkflowStream } from './api/workflowApi';
+import { fetchHistory, runWorkflowStream, deleteWorkflow } from './api/workflowApi';
 
 function App() {
-  const [workflowName, setWorkflowName] = useState("");
-  const [steps, setSteps] = useState([{ id: 1, model: "kimi-k2p5", prompt: "", criteria: "" }]);
-  const [logs, setLogs] = useState(null);
+  // --- STATE WITH PERSISTENCE ---
+  // We initialize state from localStorage if it exists
+  const [workflowName, setWorkflowName] = useState(() => localStorage.getItem("wf_name") || "");
+  const [steps, setSteps] = useState(() => {
+    const saved = localStorage.getItem("wf_steps");
+    return saved ? JSON.parse(saved) : [{ id: 1, model: "kimi-k2p5", prompt: "", criteria: "" }];
+  });
+  const [logs, setLogs] = useState(() => {
+    const saved = localStorage.getItem("wf_logs");
+    return saved ? JSON.parse(saved) : null;
+  });
+
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState(""); 
+
+  // --- EFFECT: AUTO-SAVE TO LOCAL STORAGE ---
+  useEffect(() => {
+    localStorage.setItem("wf_name", workflowName);
+    localStorage.setItem("wf_steps", JSON.stringify(steps));
+    if (logs) localStorage.setItem("wf_logs", JSON.stringify(logs));
+  }, [workflowName, steps, logs]);
 
   // Load history on mount
   const loadHistory = async () => {
     try {
       const data = await fetchHistory();
       if (Array.isArray(data)) setHistory(data);
-      return data; // Return data for immediate usage
-    } catch (e) { console.error("History load error", e); return []; }
+    } catch (e) { console.error("History error", e); }
   };
 
   const toggleSidebar = () => {
@@ -27,11 +42,35 @@ function App() {
     setIsSidebarOpen(!isSidebarOpen);
   };
 
+  // --- ACTIONS ---
+
+  const handleNewWorkflow = () => {
+    if (window.confirm("Start a new workflow? Unsaved changes will be lost.")) {
+      setWorkflowName("");
+      setSteps([{ id: 1, model: "kimi-k2p5", prompt: "", criteria: "" }]);
+      setLogs(null);
+      setLiveStatus("");
+      // Clear storage
+      localStorage.removeItem("wf_name");
+      localStorage.removeItem("wf_steps");
+      localStorage.removeItem("wf_logs");
+    }
+  };
+
   const loadWorkflow = (item) => {
     setWorkflowName(item.name);
     setSteps(item.steps);
-    setLogs(item.executions && item.executions.length > 0 ? { execution: item.executions[0] } : null);
+    const loadedLogs = item.executions && item.executions.length > 0 ? { execution: item.executions[0] } : null;
+    setLogs(loadedLogs);
+    setLiveStatus(loadedLogs ? "Loaded from History" : "");
     setIsSidebarOpen(false);
+  };
+
+  const handleDeleteWorkflow = async (id) => {
+    if (window.confirm("Are you sure you want to delete this workflow?")) {
+      await deleteWorkflow(id);
+      loadHistory(); // Refresh list
+    }
   };
 
   const addStep = () => {
@@ -51,34 +90,19 @@ function App() {
     setLogs(null); 
     setLiveStatus("Initializing Workflow...");
 
-    // Temporary array to hold results for live viewing
     let currentResults = [];
 
     try {
       for await (const update of runWorkflowStream({ name: workflowName, steps: steps })) {
         switch (update.type) {
-          case 'WORKFLOW_START':
-            setLiveStatus("Workflow Started...");
-            break;
-
-          case 'STEP_START':
-            setLiveStatus(`▶ Executing Step ${update.stepId} (${update.model})...`);
-            break;
-
-          case 'STEP_RETRY':
-            setLiveStatus(`⚠️ Step ${update.stepId} Failed Validation. Retrying (Attempt ${update.attempt})...`);
-            break;
-
+          case 'WORKFLOW_START': setLiveStatus("Workflow Started..."); break;
+          case 'STEP_START': setLiveStatus(`▶ Executing Step ${update.stepId} (${update.model})...`); break;
+          case 'STEP_RETRY': setLiveStatus(`⚠️ Step ${update.stepId} Retrying (Attempt ${update.attempt})...`); break;
+          
           case 'STEP_COMPLETE':
             setLiveStatus(`✅ Step ${update.stepId} Completed.`);
-            // LIVE UPDATE: Push new result and update view immediately
             currentResults.push(update.result);
-            setLogs({ 
-              execution: { 
-                status: "RUNNING", 
-                results: [...currentResults] 
-              } 
-            });
+            setLogs({ execution: { status: "RUNNING", results: [...currentResults] } });
             break;
 
           case 'WORKFLOW_COMPLETE':
@@ -86,37 +110,24 @@ function App() {
             setLogs({ execution: update.execution }); 
             break;
 
-          case 'ERROR':
-            setLiveStatus(`❌ Error: ${update.message}`);
-            break;
-            
+          case 'ERROR': setLiveStatus(`❌ Error: ${update.message}`); break;
           default: break;
         }
       }
     } catch (error) {
       console.error(error);
-      setLiveStatus(`❌ Connection Interrupted. Recovering...`);
+      setLiveStatus(`❌ Connection Interrupted.`);
     } finally {
-      // --- THE SAFETY NET ---
-      // Regardless of how the stream ended, we fetch the latest data from the DB.
-      // This guarantees the results appear even if the live update missed a frame.
+      // Safety Net: Fetch latest if stream failed
       try {
-        const latestHistory = await loadHistory(); // Refresh history and get data
-        if (latestHistory && latestHistory.length > 0) {
-          // The most recent run is always at index 0
-          const latestRun = latestHistory[0];
-          
-          // Force set the logs to this latest run
-          if (latestRun.executions && latestRun.executions.length > 0) {
-             setLogs({ execution: latestRun.executions[0] });
-             // Only update text if it still says "Initializing"
-             if (liveStatus === "Initializing Workflow...") {
-                setLiveStatus("✨ Workflow Completed (Loaded from History)");
-             }
-          }
+        const latestHistory = await fetchHistory();
+        if (latestHistory && latestHistory.length > 0 && latestHistory[0].name === workflowName) {
+           const latestRun = latestHistory[0];
+           if (latestRun.executions.length > 0) {
+              setLogs({ execution: latestRun.executions[0] });
+           }
         }
-      } catch (e) { console.error("Final recovery failed", e); }
-      
+      } catch (e) {}
       setLoading(false);
     }
   };
@@ -124,7 +135,14 @@ function App() {
   return (
     <div style={{ fontFamily: 'Inter, sans-serif', minHeight: '100vh', display: 'flex' }}>
       
-      <Sidebar isOpen={isSidebarOpen} toggle={toggleSidebar} history={history} onLoad={loadWorkflow} />
+      <Sidebar 
+        isOpen={isSidebarOpen} 
+        toggle={toggleSidebar} 
+        history={history} 
+        onLoad={loadWorkflow}
+        onNew={handleNewWorkflow}
+        onDelete={handleDeleteWorkflow}
+      />
 
       <div style={{ flex: 1, padding: '40px', maxWidth: '800px', margin: '0 auto' }}>
         
@@ -156,16 +174,13 @@ function App() {
           </button>
         </div>
 
-        {/* Status Bar: Visible if loading OR if there's a status message */}
         {(loading || liveStatus) && (
           <div style={{ 
             marginTop: '20px', padding: '15px', 
             background: liveStatus.includes('❌') ? '#fff5f5' : '#e3f2fd', 
             color: liveStatus.includes('❌') ? '#c53030' : '#0d47a1', 
-            borderRadius: '8px', 
-            border: liveStatus.includes('❌') ? '1px solid #feb2b2' : '1px solid #90caf9',
-            fontWeight: 'bold', textAlign: 'center',
-            transition: 'all 0.3s ease'
+            borderRadius: '8px', border: liveStatus.includes('❌') ? '1px solid #feb2b2' : '1px solid #90caf9',
+            fontWeight: 'bold', textAlign: 'center'
           }}>
             {liveStatus}
           </div>
