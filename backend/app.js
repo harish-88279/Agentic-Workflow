@@ -9,7 +9,7 @@ const prisma = new PrismaClient();
 app.use(cors());
 app.use(express.json());
 
-// Helper function to call Unbound API
+// --- HELPER: CALL AI ---
 async function callUnboundAI(model, prompt) {
   try {
     const response = await fetch(process.env.UNBOUND_API_URL, {
@@ -19,7 +19,7 @@ async function callUnboundAI(model, prompt) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: model, // "kimi-k2p5" or "kimi-k2-instruct-0905"
+        model: model,
         messages: [{ role: "user", content: prompt }]
       })
     });
@@ -30,7 +30,6 @@ async function callUnboundAI(model, prompt) {
     }
 
     const data = await response.json();
-    // OpenAI format usually puts the text here:
     return data.choices[0].message.content;
   } catch (error) {
     console.error("AI Call Failed:", error);
@@ -38,71 +37,102 @@ async function callUnboundAI(model, prompt) {
   }
 }
 
+// --- HELPER: VALIDATOR ---
+function validateStep(output, criteria) {
+  if (!criteria || criteria.trim() === "") return true;
+  const regexMatch = criteria.match(/^\/(.*?)\/([gimsuy]*)$/);
+  if (regexMatch) {
+    try {
+      return new RegExp(regexMatch[1], regexMatch[2]).test(output);
+    } catch (e) { return false; }
+  }
+  return output.includes(criteria);
+}
+
+// --- ROUTE 1: RUN WORKFLOW ---
 app.post('/api/run-workflow', async (req, res) => {
   const { name, steps } = req.body;
 
   try {
-    // 1. Create Workflow Record
+    // Save Workflow
     const workflow = await prisma.workflow.create({
-      data: {
-        name: name || "Untitled Workflow",
-        steps: steps 
-      }
+      data: { name: name || "Untitled Run", steps: steps }
     });
 
     let results = [];
     let currentContext = ""; 
-    let status = "COMPLETED";
+    let overallStatus = "COMPLETED";
 
-    // 2. Loop through steps
+    // Execute Steps
     for (const step of steps) {
-      console.log(`Running Step with Model: ${step.model}`);
-
-      // Inject Context (Simple concatenation for now)
-      // If previous step had output, append it to the prompt
+      // 1. Context Injection
       let finalPrompt = step.prompt;
       if (currentContext) {
-        finalPrompt += `\n\nContext from previous step:\n${currentContext}`;
+        finalPrompt += `\n\n### Context from Previous Step:\n${currentContext}`;
       }
 
-      // --- REAL API CALL ---
+      // 2. AI Call
       const aiOutput = await callUnboundAI(step.model, finalPrompt);
       
-      // --- CRITERIA CHECK (Basic "Contains" check for now) ---
-      // If user typed "SUCCESS", we check if output has "SUCCESS"
-      // If criteria is empty, we assume it passed.
-      let passed = true;
-      if (step.criteria && !aiOutput.includes(step.criteria)) {
-        passed = false;
-        status = "FAILED";
-      }
+      // 3. Validation
+      const passed = validateStep(aiOutput, step.criteria);
 
       results.push({
         stepId: step.id,
         output: aiOutput,
-        status: passed ? "SUCCESS" : "FAILED"
+        status: passed ? "SUCCESS" : "FAILED",
+        criteriaMatch: passed
       });
 
-      if (!passed) break; // Stop workflow on failure
-
-      // Update Context for next step
+      if (!passed) {
+        overallStatus = "FAILED";
+        break;
+      }
       currentContext = aiOutput;
     }
 
-    // 3. Save Execution
+    // Save Execution
     const execution = await prisma.execution.create({
       data: {
         workflowId: workflow.id,
-        status: status,
+        status: overallStatus,
         results: results
       }
     });
 
-    res.json({ success: true, execution });
+    res.json({ success: true, workflowId: workflow.id, execution });
 
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Execution Failed" });
+  }
+});
+
+// --- ROUTE 2: GET HISTORY (LIST) ---
+app.get('/api/workflows', async (req, res) => {
+  try {
+    const workflows = await prisma.workflow.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 20, // Limit to last 20 runs
+      include: { executions: true } // Include status
+    });
+    res.json(workflows);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch history" });
+  }
+});
+
+// --- ROUTE 3: GET DETAILS (SINGLE) ---
+app.get('/api/workflows/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const workflow = await prisma.workflow.findUnique({
+      where: { id },
+      include: { executions: true }
+    });
+    res.json(workflow);
+  } catch (error) {
+    res.status(404).json({ error: "Workflow not found" });
   }
 });
 
