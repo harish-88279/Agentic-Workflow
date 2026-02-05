@@ -5,11 +5,35 @@ export const fetchHistory = async () => {
   return await res.json();
 };
 
-export const runWorkflow = async (payload) => {
-  const res = await fetch(`${API_URL}/run-workflow`, {
+export async function* runWorkflowStream(payload) {
+  const response = await fetch(`${API_URL}/run-workflow`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  return await res.json();
-};
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    
+    // Split by newlines to handle multiple JSON objects arriving at once
+    const lines = buffer.split('\n');
+    buffer = lines.pop(); // Keep incomplete chunk in buffer
+
+    for (const line of lines) {
+      if (line.trim()) {
+        try {
+          yield JSON.parse(line);
+        } catch (e) {
+          console.error("Parse error", e);
+        }
+      }
+    }
+  }
+}

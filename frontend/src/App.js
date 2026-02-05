@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import StepEditor from './components/StepEditor';
 import ResultsView from './components/ResultsView';
-import { fetchHistory, runWorkflow } from './api/workflowApi';
+import { fetchHistory, runWorkflowStream } from './api/workflowApi';
 
 function App() {
   const [workflowName, setWorkflowName] = useState("");
@@ -11,11 +11,15 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [liveStatus, setLiveStatus] = useState(""); 
 
   // Load history on mount
   const loadHistory = async () => {
-    const data = await fetchHistory();
-    if (Array.isArray(data)) setHistory(data);
+    try {
+      const data = await fetchHistory();
+      if (Array.isArray(data)) setHistory(data);
+      return data; // Return data for immediate usage
+    } catch (e) { console.error("History load error", e); return []; }
   };
 
   const toggleSidebar = () => {
@@ -42,16 +46,79 @@ function App() {
 
   const handleRun = async () => {
     if (!workflowName.trim()) return alert("Please give your workflow a name!");
+    
     setLoading(true);
-    setLogs(null);
+    setLogs(null); 
+    setLiveStatus("Initializing Workflow...");
+
+    // Temporary array to hold results for live viewing
+    let currentResults = [];
+
     try {
-      const data = await runWorkflow({ name: workflowName, steps: steps });
-      setLogs(data);
-      loadHistory(); // Refresh history quietly
+      for await (const update of runWorkflowStream({ name: workflowName, steps: steps })) {
+        switch (update.type) {
+          case 'WORKFLOW_START':
+            setLiveStatus("Workflow Started...");
+            break;
+
+          case 'STEP_START':
+            setLiveStatus(`▶ Executing Step ${update.stepId} (${update.model})...`);
+            break;
+
+          case 'STEP_RETRY':
+            setLiveStatus(`⚠️ Step ${update.stepId} Failed Validation. Retrying (Attempt ${update.attempt})...`);
+            break;
+
+          case 'STEP_COMPLETE':
+            setLiveStatus(`✅ Step ${update.stepId} Completed.`);
+            // LIVE UPDATE: Push new result and update view immediately
+            currentResults.push(update.result);
+            setLogs({ 
+              execution: { 
+                status: "RUNNING", 
+                results: [...currentResults] 
+              } 
+            });
+            break;
+
+          case 'WORKFLOW_COMPLETE':
+            setLiveStatus("✨ Workflow Finished!");
+            setLogs({ execution: update.execution }); 
+            break;
+
+          case 'ERROR':
+            setLiveStatus(`❌ Error: ${update.message}`);
+            break;
+            
+          default: break;
+        }
+      }
     } catch (error) {
-      alert("Failed to connect to backend");
+      console.error(error);
+      setLiveStatus(`❌ Connection Interrupted. Recovering...`);
+    } finally {
+      // --- THE SAFETY NET ---
+      // Regardless of how the stream ended, we fetch the latest data from the DB.
+      // This guarantees the results appear even if the live update missed a frame.
+      try {
+        const latestHistory = await loadHistory(); // Refresh history and get data
+        if (latestHistory && latestHistory.length > 0) {
+          // The most recent run is always at index 0
+          const latestRun = latestHistory[0];
+          
+          // Force set the logs to this latest run
+          if (latestRun.executions && latestRun.executions.length > 0) {
+             setLogs({ execution: latestRun.executions[0] });
+             // Only update text if it still says "Initializing"
+             if (liveStatus === "Initializing Workflow...") {
+                setLiveStatus("✨ Workflow Completed (Loaded from History)");
+             }
+          }
+        }
+      } catch (e) { console.error("Final recovery failed", e); }
+      
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -88,6 +155,21 @@ function App() {
             {loading ? "Running..." : "▶ Run Workflow"}
           </button>
         </div>
+
+        {/* Status Bar: Visible if loading OR if there's a status message */}
+        {(loading || liveStatus) && (
+          <div style={{ 
+            marginTop: '20px', padding: '15px', 
+            background: liveStatus.includes('❌') ? '#fff5f5' : '#e3f2fd', 
+            color: liveStatus.includes('❌') ? '#c53030' : '#0d47a1', 
+            borderRadius: '8px', 
+            border: liveStatus.includes('❌') ? '1px solid #feb2b2' : '1px solid #90caf9',
+            fontWeight: 'bold', textAlign: 'center',
+            transition: 'all 0.3s ease'
+          }}>
+            {liveStatus}
+          </div>
+        )}
 
         <ResultsView logs={logs} />
       </div>
