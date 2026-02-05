@@ -9,54 +9,87 @@ const prisma = new PrismaClient();
 app.use(cors());
 app.use(express.json());
 
-// 1. Route to Save & Run a Workflow
+// Helper function to call Unbound API
+async function callUnboundAI(model, prompt) {
+  try {
+    const response = await fetch(process.env.UNBOUND_API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.UNBOUND_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: model, // "kimi-k2p5" or "kimi-k2-instruct-0905"
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`API Error: ${errText}`);
+    }
+
+    const data = await response.json();
+    // OpenAI format usually puts the text here:
+    return data.choices[0].message.content;
+  } catch (error) {
+    console.error("AI Call Failed:", error);
+    return `[Error calling AI: ${error.message}]`;
+  }
+}
+
 app.post('/api/run-workflow', async (req, res) => {
   const { name, steps } = req.body;
 
   try {
-    // A. Save the Blueprint
+    // 1. Create Workflow Record
     const workflow = await prisma.workflow.create({
       data: {
         name: name || "Untitled Workflow",
-        steps: steps // Array of objects
+        steps: steps 
       }
     });
 
-    console.log(`Starting Workflow: ${workflow.id}`);
-
-    // B. Execute Logic (Simplified for First Pass)
     let results = [];
     let currentContext = ""; 
     let status = "COMPLETED";
 
+    // 2. Loop through steps
     for (const step of steps) {
-      console.log(`Executing Step: Using ${step.model}`);
-      
-      // --- MOCK LLM CALL (Replace with Real Unbound API later) ---
-      // Simulating a delay and a response
-      await new Promise(r => setTimeout(r, 1000)); 
-      
-      const mockOutput = `[Mock Output from ${step.model}] for prompt: "${step.prompt}". Context used: ${currentContext.substring(0, 20)}...`;
-      
-      // --- MOCK VALIDATION ---
-      const passed = true; // Hardcoded pass for now
+      console.log(`Running Step with Model: ${step.model}`);
 
-      if (!passed) {
+      // Inject Context (Simple concatenation for now)
+      // If previous step had output, append it to the prompt
+      let finalPrompt = step.prompt;
+      if (currentContext) {
+        finalPrompt += `\n\nContext from previous step:\n${currentContext}`;
+      }
+
+      // --- REAL API CALL ---
+      const aiOutput = await callUnboundAI(step.model, finalPrompt);
+      
+      // --- CRITERIA CHECK (Basic "Contains" check for now) ---
+      // If user typed "SUCCESS", we check if output has "SUCCESS"
+      // If criteria is empty, we assume it passed.
+      let passed = true;
+      if (step.criteria && !aiOutput.includes(step.criteria)) {
+        passed = false;
         status = "FAILED";
-        break;
       }
 
       results.push({
         stepId: step.id,
-        output: mockOutput,
-        status: "SUCCESS"
+        output: aiOutput,
+        status: passed ? "SUCCESS" : "FAILED"
       });
 
+      if (!passed) break; // Stop workflow on failure
+
       // Update Context for next step
-      currentContext = mockOutput;
+      currentContext = aiOutput;
     }
 
-    // C. Save Execution History
+    // 3. Save Execution
     const execution = await prisma.execution.create({
       data: {
         workflowId: workflow.id,
