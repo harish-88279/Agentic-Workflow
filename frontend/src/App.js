@@ -6,11 +6,10 @@ import { fetchHistory, runWorkflowStream, deleteWorkflow } from './api/workflowA
 
 function App() {
   // --- STATE WITH PERSISTENCE ---
-  // We initialize state from localStorage if it exists
   const [workflowName, setWorkflowName] = useState(() => localStorage.getItem("wf_name") || "");
   const [steps, setSteps] = useState(() => {
     const saved = localStorage.getItem("wf_steps");
-    return saved ? JSON.parse(saved) : [{ id: 1, model: "kimi-k2p5", prompt: "", criteria: "" }];
+    return saved ? JSON.parse(saved) : [{ id: 1, model: "kimi-k2p5", prompt: "", criteria: "", retryLimit: 3 }];
   });
   const [logs, setLogs] = useState(() => {
     const saved = localStorage.getItem("wf_logs");
@@ -22,7 +21,7 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState(""); 
 
-  // --- EFFECT: AUTO-SAVE TO LOCAL STORAGE ---
+  // --- EFFECT: AUTO-SAVE ---
   useEffect(() => {
     localStorage.setItem("wf_name", workflowName);
     localStorage.setItem("wf_steps", JSON.stringify(steps));
@@ -42,15 +41,33 @@ function App() {
     setIsSidebarOpen(!isSidebarOpen);
   };
 
+  // --- EXPORT FUNCTION ---
+  const handleExport = () => {
+    if (!workflowName) return alert("Please name your workflow before exporting.");
+    
+    const workflowData = {
+      name: workflowName,
+      steps: steps,
+      exportedAt: new Date().toISOString()
+    };
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(workflowData, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", `${workflowName.replace(/\s+/g, '_')}.json`);
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  };
+
   // --- ACTIONS ---
 
   const handleNewWorkflow = () => {
     if (window.confirm("Start a new workflow? Unsaved changes will be lost.")) {
       setWorkflowName("");
-      setSteps([{ id: 1, model: "kimi-k2p5", prompt: "", criteria: "" }]);
+      setSteps([{ id: 1, model: "kimi-k2p5", prompt: "", criteria: "", retryLimit: 3 }]);
       setLogs(null);
       setLiveStatus("");
-      // Clear storage
       localStorage.removeItem("wf_name");
       localStorage.removeItem("wf_steps");
       localStorage.removeItem("wf_logs");
@@ -69,12 +86,12 @@ function App() {
   const handleDeleteWorkflow = async (id) => {
     if (window.confirm("Are you sure you want to delete this workflow?")) {
       await deleteWorkflow(id);
-      loadHistory(); // Refresh list
+      loadHistory(); 
     }
   };
 
   const addStep = () => {
-    setSteps([...steps, { id: steps.length + 1, model: "kimi-k2p5", prompt: "", criteria: "" }]);
+    setSteps([...steps, { id: steps.length + 1, model: "kimi-k2p5", prompt: "", criteria: "", retryLimit: 3 }]);
   };
 
   const removeStep = (id) => setSteps(steps.filter(s => s.id !== id));
@@ -132,24 +149,6 @@ function App() {
     }
   };
 
-  const handleExport = () => {
-    if (!workflowName) return alert("Please name your workflow before exporting.");
-    
-    const workflowData = {
-      name: workflowName,
-      steps: steps,
-      exportedAt: new Date().toISOString()
-    };
-
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(workflowData, null, 2));
-    const downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", `${workflowName.replace(/\s+/g, '_')}.json`);
-    document.body.appendChild(downloadAnchorNode);
-    downloadAnchorNode.click();
-    downloadAnchorNode.remove();
-  };
-  
   return (
     <div style={{ fontFamily: 'Inter, sans-serif', minHeight: '100vh', display: 'flex' }}>
       
@@ -188,7 +187,7 @@ function App() {
         <div style={{ marginTop: '20px', display: 'flex', gap: '10px', justifyContent: 'center' }}>
           <button onClick={addStep} style={{ padding: '12px 24px', background: '#f0f0f0', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>+ Add Step</button>
           
-          {/* NEW EXPORT BUTTON */}
+          {/* EXPORT BUTTON IS HERE */}
           <button onClick={handleExport} style={{ padding: '12px 24px', background: '#e0e7ff', color: '#4338ca', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
             ⬇ Export JSON
           </button>

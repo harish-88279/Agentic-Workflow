@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const workflowRoutes = require('./routes/workflowRoutes');
-
 const app = express();
 const PORT = 3001;
 
@@ -13,6 +12,7 @@ app.use(cors({
   origin: '*', 
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS']
 }));
+app.use(express.json());
 
 // ... rest of code ...app.use(express.json());
 
