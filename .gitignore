@@ -1,0 +1,20 @@
+node_modules/
+.zencoder
+.zenflow
+
+#backend
+backend/generated/prisma
+backend/.env
+
+#forntend
+frontend/.pnp
+frontend/.pnp.js
+frontend/coverage/
+frontend/build/
+frontend/dist/
+
+# Ignore local environment files in frontend
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
