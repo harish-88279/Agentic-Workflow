@@ -132,6 +132,24 @@ function App() {
     }
   };
 
+  const handleExport = () => {
+    if (!workflowName) return alert("Please name your workflow before exporting.");
+    
+    const workflowData = {
+      name: workflowName,
+      steps: steps,
+      exportedAt: new Date().toISOString()
+    };
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(workflowData, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", `${workflowName.replace(/\s+/g, '_')}.json`);
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  };
+  
   return (
     <div style={{ fontFamily: 'Inter, sans-serif', minHeight: '100vh', display: 'flex' }}>
       
@@ -169,6 +187,12 @@ function App() {
 
         <div style={{ marginTop: '20px', display: 'flex', gap: '10px', justifyContent: 'center' }}>
           <button onClick={addStep} style={{ padding: '12px 24px', background: '#f0f0f0', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>+ Add Step</button>
+          
+          {/* NEW EXPORT BUTTON */}
+          <button onClick={handleExport} style={{ padding: '12px 24px', background: '#e0e7ff', color: '#4338ca', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+            ⬇ Export JSON
+          </button>
+
           <button onClick={handleRun} disabled={loading} style={{ padding: '12px 24px', background: loading ? '#ccc' : '#000', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
             {loading ? "Running..." : "▶ Run Workflow"}
           </button>
