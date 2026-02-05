@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,4 +5,24 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// The Blueprint
+model Workflow {
+  id        String   @id @default(uuid())
+  name      String
+  steps     Json     // Stores array of { prompt, model, criteria }
+  createdAt DateTime @default(now())
+  executions Execution[]
+}
+
+// The History
+model Execution {
+  id         String   @id @default(uuid())
+  workflowId String
+  status     String   // "PENDING", "COMPLETED", "FAILED"
+  results    Json     // Stores the output of each step
+  createdAt  DateTime @default(now())
+  
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
 }
