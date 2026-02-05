@@ -6,8 +6,15 @@ const workflowRoutes = require('./routes/workflowRoutes');
 const app = express();
 const PORT = 3001;
 
-app.use(cors());
-app.use(express.json());
+// UPDATE CORS
+app.use(cors({
+  // Allow your future Vercel URL (e.g., https://my-workflow-app.vercel.app)
+  // OR use '*' to allow everyone (easiest for Hackathons)
+  origin: '*', 
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS']
+}));
+
+// ... rest of code ...app.use(express.json());
 
 // Mount Routes
 app.use('/api', workflowRoutes);
